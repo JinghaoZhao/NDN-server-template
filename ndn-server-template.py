@@ -15,7 +15,7 @@ import sys
 
 try:
     sys.path.append('/usr/local/python')
-    from openpose import pyopenpose as op
+    # from openpose import pyopenpose as op
 except ImportError as e:
     print(
         'Error: OpenPose library could not be found. Did you enable `BUILD_PYTHON` in CMake and have this Python script in the right folder?')

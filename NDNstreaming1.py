@@ -224,7 +224,7 @@ def run(device_name, ffmpeg_type="cpu" ,display=False):
         # .video
         .output("pipe:", format='rawvideo', pix_fmt='bgr24')
         .global_args('-re')
-        .global_args('-stream_loop', '1')
+        .global_args('-stream_loop', '1000')
         .run_async(pipe_stdin=False, pipe_stdout=True)
     )
     dth = threading.Thread(target=display_thread, args=(100000, process, device_name))
