@@ -3,7 +3,7 @@
 ## Install the ffmpeg and python libs
 
 ```
-sudo apt install ffmpeg
+sudo snap install ffmpeg
 pip3 install -r ./requirements.txt
 ```
 
