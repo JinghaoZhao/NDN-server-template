@@ -160,7 +160,7 @@ def video_encoder():
             if task_type == "raw":
                 # TODO: Porcess the frame with ML model, then put the processed frame as display_image
                 display_image = cv2.cvtColor(cv2.Canny(producer_frame, 100, 200), cv2.COLOR_GRAY2BGR)
-                # display_image = producer_frame
+                display_image = producer_frame
 
             encoder.stdin.write(
                 display_image

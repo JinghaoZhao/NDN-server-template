@@ -225,7 +225,7 @@ def run(device_name, display=False):
     # Decoding process
     process = (
         ffmpeg
-        .input('pipe:', format="h264", vcodec='h264_cuvid')
+        .input('pipe:', format="h264")
         .video
         # .output('captures/output.avi')
         # .output('captures/out1.bgr', format='rawvideo', pix_fmt='bgr24')
