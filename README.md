@@ -7,7 +7,21 @@ sudo snap install ffmpeg
 pip3 install -r ./requirements.txt
 ```
 
+## Install the customized NDN-libs
+```
+git clone https://github.com/JinghaoZhao/ndn-cxx.git
+git clone https://github.com/JinghaoZhao/WING-NFD.git
+```
+
+Then compile and install the ndn-cxx and NFD with tutorials:
+https://github.com/JinghaoZhao/ndn-cxx/blob/ndnar/docs/INSTALL.rst
+https://github.com/JinghaoZhao/WING-NFD/blob/master/docs/INSTALL.rst
+
 ## Usage
+Before running the server, start the NFD with 
+```
+ nfd-start
+```
 The current template using a local file as the input for testing convenience. To run the demo, first start the server
 ```
  python ndn-server-template.py
