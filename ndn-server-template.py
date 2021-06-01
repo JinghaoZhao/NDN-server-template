@@ -172,12 +172,13 @@ def video_encoder():
             last_time = time.time()
 
             # Need to convert to uint8 for processing and display
-            # try:
-            #     cv2.imshow("ServerDisplay", display_image.astype("uint8"))
-            #     if cv2.waitKey(1) & 0xFF == ord('q'):
-            #         break
-            # except:
-            cv2.imwrite("ServerDisplay.jpg", display_image.astype("uint8"))
+            DISPLAY_FLAG = True
+            if DISPLAY_FLAG:
+                cv2.imshow("ServerDisplay", display_image.astype("uint8"))
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            else:
+                cv2.imwrite("ServerDisplay.jpg", display_image.astype("uint8"))
 
         # Use a constant interval for fetching the frames
         sleeptime = max(0.0, interval - (time.time() - start_time))
