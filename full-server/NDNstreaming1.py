@@ -1,28 +1,16 @@
 import logging
 import time
-
 import ndn.utils
-# from ndn.app import NDNApp
 from MyNDNApp import MyNDNApp
 from ndn.types import InterestNack, InterestTimeout, InterestCanceled, ValidationFailure
 from ndn.encoding import Name, Component, InterestParam, BinaryStr, FormalName, MetaInfo
-
 from frame_fetcher import frame_fetcher
 import asyncio
-from asyncio import Future
 import numpy as np
-from numpy import random
 import ffmpeg
 import cv2
-import io
-import os
-import shutil
 from security.checkers import sha256_rsa_checker
 from Crypto.Cipher import AES
-
-# None block read
-import fcntl
-
 # Use the receiver and decoder in separate threads
 import threading
 from collections import deque
@@ -37,11 +25,7 @@ app = MyNDNApp()
 app.data_validator = sha256_rsa_checker
 
 view_img = False
-
 header_dict = {"I": b'\x00\x00\x00\x01g', "P": b'\x00\x00\x00\x01A'}
-height = 720
-width = 1280
-delay = 0
 ct = 0
 dt = []
 start_feed = False
@@ -165,11 +149,7 @@ async def main(device_name, process):
         while (lost_frames <= 20) and (current_frame_num < last_frame_num + 10000):
             # Just in case, refreshes the last frame number in every 10000 frames
             if len(frame_queue) < window_len:
-                # h264_results_name = "/{}/1080p/frame/".format(device_name) + str(current_frame_num)
-                if current_frame_num % 30 == iframe_index:
-                    h264_results_name = "/{}/1080p/frame/I/{}".format(device_name, current_frame_num)
-                else:
-                    h264_results_name = "/{}/1080p/frame/P/{}".format(device_name, current_frame_num)
+                h264_results_name = "/{}/1080p/chunk/{}".format(device_name, current_frame_num)
                 print("Requesting frame", h264_results_name)
                 future = loop.create_future()
                 future.add_done_callback(frame_callback)
@@ -244,38 +224,24 @@ def display_thread(process, device_name, width, height):
             time.sleep(.01)
 
 
-def run(device_name, width=1920, height=1080, video_name="1080ptest.mp4", ffmpeg_type="cpu", display=False):
+def run(device_name, width=1920, height=1080, ffmpeg_type="cpu", display=False):
     global view_img
     view_img = display
     # Decoding process
     if ffmpeg_type == "cpu":
         process = (
             ffmpeg
-            .input('pipe:', format="h264")
-            .video
-            # .output('captures/output.avi')
-            # .output('captures/out1.bgr', format='rawvideo', pix_fmt='bgr24')
-            .output("pipe:", format='rawvideo', pix_fmt='bgr24')
-            # .global_args('-fflags', 'nobuffer')
-            # .global_args('-flags', 'low_delay')
-            # .global_args('-avioflags', 'direct')
-            # .global_args('-threads', '1')
-            # .global_args('-bufsize', '')
-            .run_async(pipe_stdin=True, pipe_stdout=True)
+                .input('pipe:', format="h264")
+                .video
+                .output("pipe:", format='rawvideo', pix_fmt='bgr24')
+                .run_async(pipe_stdin=True, pipe_stdout=True)
         )
     else:
         process = (
             ffmpeg
                 .input('pipe:', format="h264", vcodec='h264_cuvid')
                 .video
-                # .output('captures/output.avi')
-                # .output('captures/out1.bgr', format='rawvideo', pix_fmt='bgr24')
                 .output("pipe:", format='rawvideo', pix_fmt='bgr24')
-                # .global_args('-fflags', 'nobuffer')
-                # .global_args('-flags', 'low_delay')
-                # .global_args('-avioflags', 'direct')
-                # .global_args('-threads', '1')
-                # .global_args('-bufsize', '')
                 .run_async(pipe_stdin=True, pipe_stdout=True)
         )
     dth = threading.Thread(target=display_thread, args=(process, device_name, width, height))
