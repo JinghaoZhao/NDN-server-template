@@ -51,7 +51,7 @@ Client's certificate chain:
 * **Step 1.A:** Client authenticates server by accepting server's self-signed certificate from out-of-band channel (i.e., git clone this repo).
 * **Step 1.B:** Server authenticates client by validating client's testbed-signed certificate, with the testbed root certificate as certificate chain trust anchor.
 
-### Step 2: Installing Security Components  
+### Step 2: Installing security components  
 * **Step 2.A:** Client installs trust anchor (completed in Step 1.A)
 * **Step 2.B:** Client self-assigns a name by concatenating the trust anchor prefix and partial suffix of client's testbed-signed certificate and get ``/ndn/edu/ucla/icear/tianyuan-icear-client``
 * **Step 2.C:** Client applies a certificate for ``/ndn/edu/ucla/icear/tianyuan-icear-client``
