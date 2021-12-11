@@ -1,39 +1,40 @@
-import numpy as np
-import NDNstreaming1
-import threading, time, cv2, ffmpeg, sys, os, argparse, logging
-from collections import deque
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.PublicKey import RSA
-from ndn.app import NDNApp
-from ndn.encoding import Name, InterestParam, BinaryStr, FormalName, Component
 from ndn.security import Sha256WithRsaSigner
 from security.DefaultKeys import DefaultKeys
-from models.experimental import attempt_load
-from utils.datasets import letterbox
-from utils.general import check_img_size, non_max_suppression, scale_coords
-from utils.plots import plot_one_box
-from utils.torch_utils import select_device, load_classifier, time_synchronized
-import torch
-import torch.backends.cudnn as cudnn
-from typing import Optional
-import trimesh
-from pyrender import PerspectiveCamera, SpotLight, Mesh, Node, Scene, OffscreenRenderer, RenderFlags
-from facenet_pytorch import MTCNN
-import paddlehub as hub
-from PIL import Image
 from Crypto.Cipher import AES
+# import NDNstreaming1
+import NDNstreaming2 as NDNstreaming1
+import ffmpeg
+from ndn.app import NDNApp
+from ndn.encoding import Name, InterestParam, BinaryStr, FormalName, MetaInfo, Component
+from collections import deque
+from typing import Optional
+from queue import Queue
+import numpy as np
+from tf_pose.estimator import TfPoseEstimator, TfPoseEstimatorSacc
+from tf_pose.networks import get_graph_path, model_wh
+import threading, os, sys, cv2, signal, time, logging, argparse
+
+logger = logging.getLogger('TfPoseEstimatorRun')
+logger.handlers.clear()
+logger.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 try:
     sys.path.append('/usr/local/python')
-    from openpose import pyopenpose as op
 except ImportError as e:
     print(
         'Error: OpenPose library could not be found. Did you enable `BUILD_PYTHON` in CMake and have this Python script in the right folder?')
     raise e
 
-ffmpeg_type = "gpu"  # "gpu" or "cpu"
-height = 1080
-width = 1920
+ffmpeg_type = "cpu"  # "gpu" or "cpu"
+height = 480  # 1080
+width = 640  # 1920
 crf = 30
 interval = 1. / crf
 logging.basicConfig(level=logging.DEBUG)
@@ -44,13 +45,13 @@ except ImportError:
     import _thread as thread
 
 dth = threading.Thread(target=NDNstreaming1.run, args=('NEAR/group1/producer1', width, height, ffmpeg_type))
+# dth = threading.Thread(target=NDNstreaming1.run, args=('testecho',))
 dth.start()
 
 if ffmpeg_type == "gpu":
     encoder = (
         ffmpeg
             .input("pipe:", format='rawvideo', s='{}x{}'.format(width, height), pix_fmt='bgr24')
-            # .output("pipe:", format='h264', vcodec='h264_nvenc', crf=crf, g=crf, keyint_min=crf, bf=0, bitrate='320k', profile="baseline", pix_fmt='yuv420p')  # 720p
             .output("pipe:", format='h264', vcodec='h264_nvenc', crf=crf, g=crf, keyint_min=crf, bf=0, bitrate='2000k',
                     profile="baseline", pix_fmt='yuv420p')  # 1080p
             .video
@@ -148,6 +149,7 @@ def on_interest(name: FormalName, param: InterestParam, _app_param: Optional[Bin
             print(f'handle interest: publish pending interest' + Name.to_str(pendingName) + "------------/" + str(
                 pendingFN) + "length: ", len(content))
 
+
 @app.route('/ca')
 def resizeImg(im, desired_width, desired_height):
     old_size = im.shape[:2]  # old_size is in (height, width) format
@@ -167,95 +169,72 @@ def resizeImg(im, desired_width, desired_height):
         return np.zeros(desired_height * desired_width * 3)
 
 
+def test_resize(in_q, out_q):
+    while True:
+        display_image = in_q.get()
 
-def video_encoder():
+        # resize image
+        # display_image = cv2.resize(display_image, (384*2, 384*2), interpolation = cv2.INTER_AREA)
+        display_image = cv2.resize(display_image, (width, height), interpolation=cv2.INTER_AREA)
+        out_q.put(display_image)
+
+
+def test_display(in_q):
+    while True:
+        display_image = in_q.get()
+
+        # resize image
+        # display_image = cv2.resize(display_image, (384*2, 384*2), interpolation = cv2.INTER_AREA)
+        # print('Received Image')
+        in_q.task_done()
+        encoder.stdin.write(
+            display_image
+                .astype(np.uint8)
+                .tobytes()
+        )
+        encoder.stdin.flush()
+        # print("handle interval: ", time.time() - last_time, " curr_time: ", time.time())
+        last_time = time.time()
+
+        # Need to convert to uint8 for processing and display
+        DISPLAY_FLAG = True
+        if DISPLAY_FLAG:
+            cv2.imshow("ServerDisplay", display_image.astype("uint8"))
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        else:
+            pass
+            # cv2.imwrite("ServerDisplay.jpg", display_image.astype("uint8"))
+            # out.write(display_image.astype("uint8"))
+
+
+def test_draw(in_q, out_q):
+    while True:
+        (producer_frame, humans) = in_q.get()
+        display_image = TfPoseEstimator.draw_humans(producer_frame, humans[0], imgcopy=False)
+        # display_image = producer_frame
+        out_q.put(display_image)
+
+
+def worker_write(q2):
+    import tensorflow as tf
+    frame_width = 384
+    frame_height = 384
+    out = cv2.VideoWriter('output_{}.avi'.format('FPGA'), cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 10,
+                          (frame_width, frame_height))
+    while True:
+
+        if not q2.empty():
+            image6 = q2.get()
+            out.write(image6)
+
+
+def video_encoder(out_q):
     global left_frame, display_image
     # cv2.namedWindow("Output", cv2.WINDOW_GUI_NORMAL)
     # producer_frame = np.random.randint(0, 256, height * width * 3, dtype='uint8')
 
     task_type = args.task
-    device = select_device(args.device)
-    if task_type == "yolo":
-        source, weights, view_img, save_txt, imgsz = args.source, args.weights, args.view_img, args.save_txt, args.img_size
-
-        # Initialize
-        half = device.type != 'cpu'  # half precision only supported on CUDA
-
-        # ======================================Load Yolo model=========================================================
-        yoloModel = attempt_load(weights, map_location=device)  # load FP32 model
-        stride = int(yoloModel.stride.max())
-        imgsz = check_img_size(imgsz, s=stride)  # check img_size
-        if half:
-            yoloModel.half()  # to FP16
-
-        view_img = True
-        cudnn.benchmark = True  # set True to speed up constant image size inference
-
-        # Get names and colors
-        yoloNames = yoloModel.module.names if hasattr(yoloModel, 'module') else yoloModel.names
-        yoloColors = [[np.random.randint(0, 255) for _ in range(3)] for _ in yoloNames]
-
-        if device.type != 'cpu':
-            yoloModel(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(yoloModel.parameters())))  # run once
-    elif task_type == "face":
-        # ======================================Load Face Detection model=========================================================
-        mtcnnModel = MTCNN(keep_all=True, device=device)
-    elif task_type == "openpose":
-        # ======================================Load Openpose model=========================================================
-        try:
-            params = dict()
-            params["model_folder"] = "./models/"
-            # params["face"] = True
-            # params["hand"] = True
-            # Starting OpenPose
-            opWrapper = op.WrapperPython()
-            opWrapper.configure(params)
-            opWrapper.start()
-        except Exception as e:
-            print(e)
-            # sys.exit(-1)
-    elif task_type == "modelrotate" or task_type == "armarker" or task_type == "arvideo":
-        # ======================================Load AR Marker=========================================================
-        markerTarget = cv2.imread('./marker/marker.jpg')
-        markerH, markerW, markerC = markerTarget.shape
-        orbModel = cv2.ORB_create(nfeatures=1000)
-        marker_kp1, marker_des1 = orbModel.detectAndCompute(markerTarget, None)
-        camera_parameters = np.array([[800, 0, 320], [0, 800, 240], [0, 0, 1]])
-        last_matrix = np.ndarray(shape=(3, 3), dtype=float, order='F')
-
-        # ======================================Load AR MP4=========================================================
-        arVideo = cv2.VideoCapture('./marker/Tunnel.mp4')
-        _, imgArVideo = arVideo.read()
-        markerDetection = False
-        arVideoFrameCounter = 0
-        last_dst = np.float32([[0, 0], [0, 0], [0, 0], [0, 0]]).reshape(-1, 1, 2)
-
-        # ======================================Init AR 3D model=========================================================
-        pyrenderScene = Scene(ambient_light=[0.02, 0.02, 0.02], bg_color=(0, 0, 0, 0))
-        # scene = Scene.from_trimesh_scene(bg_scene)
-        fuze_trimesh = trimesh.load('./model3d/drill.obj')
-        mesh = Mesh.from_trimesh(fuze_trimesh)
-        mesh_node = Node(mesh=mesh, matrix=np.eye(4))
-        pyrenderScene.add_node(mesh_node)
-        # Set up the camera -- z-axis away from the scene, x-axis right, y-axis up
-        camera = PerspectiveCamera(yfov=np.pi / 3.0, aspectRatio=1.414)
-        s = np.sqrt(2) / 2
-        camera_pose = np.array([
-            [0.0, -s, s, 0.3],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, s, s, 0.3],
-            [0.0, 0.0, 0.0, 1.0],
-        ])
-        # # add normal camera
-        # scene.add(camera, pose=camera_pose)
-        # Or add a camera node
-        cam_node = Node(camera=camera, matrix=camera_pose)
-        pyrenderScene.add_node(cam_node)
-        light = SpotLight(color=np.ones(3), intensity=3.0, innerConeAngle=np.pi / 16.0)
-        pyrenderScene.add(light, pose=camera_pose)
-        offscreenRender = OffscreenRenderer(640, 480)
-    elif task_type == "humanseg":
-        human_seg = hub.Module(name="humanseg_lite")
 
     last_time = time.time()
     while True:
@@ -264,23 +243,14 @@ def video_encoder():
         # print("Frame buffer of streaming 2", len(NDNstreaming2.decoded_frame))
         if len(NDNstreaming1.decoded_frame) > 0:
             producer_frame = NDNstreaming1.decoded_frame[-1][1]
-            if task_type == "raw":
-                display_image = producer_frame
+            humans = fpga_est.inference(producer_frame, resize_to_default=True, upsample_size=args.resize_out_ratio)
+            # humans = []
+            if not args.showBG:
+                producer_frame = np.zeros(producer_frame.shape)
+            # display_image = TfPoseEstimator.draw_humans(producer_frame, humans[0], imgcopy=False)
+            # out_q.put(display_image)
+            out_q.put((producer_frame, humans))
 
-            encoder.stdin.write(
-                display_image
-                    .astype(np.uint8)
-                    .tobytes()
-            )
-            encoder.stdin.flush()
-            print("handle interval: ", time.time() - last_time, " curr_time: ", time.time())
-            last_time = time.time()
-            cv2.imshow("Output", display_image.astype("uint8"))
-            # Need to convert to uint8 for processing and display
-            # cv2.imshow("Shareview", left_frame.astype("uint8"))
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-                # sys.exit(-1)
         # Use a constant interval for fetching the frames
         sleeptime = max(0.0, interval - (time.time() - start_time))
         # print("handle sleeptime: ", sleeptime, " ", time.time() - start_time, " curr_time: ", time.time())
@@ -338,37 +308,63 @@ def get_frames():
             last_time = time.time()
 
 
+def signal_handler(signal, frame):
+    os.killpg(os.getpgid(encoder.pid), 9)
+    os.killpg(os.getpgid(NDNstreaming1.pid), 9)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="NDN AR demo")
-    parser.add_argument('--task', type=str, default='yolo', help='AR Task Type')  # Task
-    parser.add_argument('--output', type=str, default='inference/output', help='output folder')  # output folder
-    parser.add_argument('--weights', nargs='+', type=str, default='models/yolov5s.pt', help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default='data/images', help='source')  # file/folder, 0 for webcam
-    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--view-img', action='store_true', help='display results')
-    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
-    parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
-    parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
-    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
-    parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
-    parser.add_argument('--augment', action='store_true', help='augmented inference')
-    parser.add_argument('--update', action='store_true', help='update all models')
-    parser.add_argument('--project', default='runs/detect', help='save results to project/name')
-    parser.add_argument('--name', default='exp', help='save results to project/name')
-    parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
-
-
-
-
-
-
+    parser.add_argument('--task', type=str, default='raw', help='AR Task Type')  # Task
+    parser.add_argument('--video', type=str, default='')
+    parser.add_argument('--model', type=str, default='mobilenet_thin',
+                        help='cmu / mobilenet_thin / mobilenet_v2_large / mobilenet_v2_small')
+    parser.add_argument('--resize', type=str, default='384x384',
+                        help='if provided, resize images before they are processed. '
+                             'default=0x0, Recommends : 432x368 or 656x368 or 1312x736 ')
+    parser.add_argument('--resize-out-ratio', type=float, default=4.0,
+                        help='if provided, resize heatmaps before they are post-processed. default=1.0')
+    parser.add_argument('--display', action='store_true',
+                        help='whether output result to monitor')
+    parser.add_argument('--device', type=str, default='FPGA',
+                        help='specify the inference device')
+    parser.add_argument('--show-process', type=bool, default=False,
+                        help='for debug purpose, if enabled, speed for inference is dropped.')
+    parser.add_argument('--showBG', type=bool, default=True, help='False to show skeleton only.')
     args = parser.parse_args()
 
-    eth = threading.Thread(target=video_encoder)
+    w, h = model_wh(args.resize)
+    if args.device == 'CPU':
+        if w == 0 or h == 0:
+            fpga_est = TfPoseEstimator(get_graph_path(args.model), target_size=(432, 368))
+        else:
+            fpga_est = TfPoseEstimator(get_graph_path(args.model), target_size=(w, h))
+    elif args.device == 'FPGA':
+        if w == 0 or h == 0:
+            fpga_est = TfPoseEstimatorSacc(get_graph_path(args.model), target_size=(432, 368))
+        else:
+            fpga_est = TfPoseEstimatorSacc(get_graph_path(args.model), target_size=(w, h))
+
+    out_video = Queue()
+    out_draw = Queue()
+    out_resize = Queue()
+
+    eth = threading.Thread(target=video_encoder, args=(out_video,))
+    dth = threading.Thread(target=test_draw, args=(out_video, out_draw))
+    rth = threading.Thread(target=test_resize, args=(out_draw, out_resize))
+    tth = threading.Thread(target=test_display, args=(out_draw,))
+    # wth = threading.Thread(target=worker_write, args=(out_draw,))
     eth.start()
+    dth.start()
+    # rth.start()
+    tth.start()
+    # wth.start()
+
     fth = threading.Thread(target=get_frames)
     fth.start()
     app.run_forever()
+    out_video.join()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    encoder.wait()
+    print('finish')
