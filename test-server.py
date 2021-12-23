@@ -1,6 +1,5 @@
 import base64
 import logging
-from typing import Dict, Any
 from typing import Optional
 from os import urandom
 import time
@@ -17,12 +16,12 @@ from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat
 from ndn.app_support.security_v2 import SafeBag, SecurityV2TypeNumber, parse_certificate, CertificateV2Value, derive_cert
 from ndn.security.signer import Sha256WithEcdsaSigner
 from ndn.encoding import Name, InterestParam, BinaryStr, FormalName, parse_and_check_tl, SignatureType, SignaturePtrs
-from ndn.app import NDNApp
+from sec.bootApp import NDNApp
 
 from security_helper import *
 
 logging.basicConfig(format='[{asctime}]{levelname}:{message}', datefmt='%Y-%m-%d %H:%M:%S',
-                    level=logging.INFO, style='{')
+                    level=logging.DEBUG, style='{')
 
 app = NDNApp()
 # security components
@@ -73,10 +72,12 @@ async def _validator_wrapper(name: FormalName, sig_ptrs: SignaturePtrs, _validat
 # if public key is already at local
 async def verify_known_ecdsa_signature(name: FormalName, sig: SignaturePtrs) -> bool:
     global client_self_signed
-
     sig_info = sig.signature_info
     covered_part = sig.signature_covered_part
     sig_value = sig.signature_value_buf
+    if not sig_info:
+        # TODO: Android app with jNDN cannot sign the interest yet
+        return True
     if not sig_info or sig_info.signature_type != SignatureType.SHA256_WITH_ECDSA:
         return False
     if not covered_part or not sig_value:
@@ -102,7 +103,7 @@ async def verify_known_ecdsa_signature(name: FormalName, sig: SignaturePtrs) -> 
 async def verify_ecdsa_signature(name: FormalName, sig: SignaturePtrs) -> bool:
     global trust_anchor
 
-    logging.debug("Validating certificate %s", Name.to_str(name))
+    logging.debug("Validating certificate {}".format(Name.to_str(name)))
     sig_info = sig.signature_info
     covered_part = sig.signature_covered_part
     sig_value = sig.signature_value_buf
@@ -111,7 +112,7 @@ async def verify_ecdsa_signature(name: FormalName, sig: SignaturePtrs) -> bool:
     if not covered_part or not sig_value:
         return False
     key_name = sig_info.key_locator.name[0:]
-    logging.debug('Extracting key_name: ', Name.to_str(key_name))
+    logging.debug('Extracting key_name: {}'.format(Name.to_str(key_name)))
 
     # check it's testbed root
     key_bits = None
